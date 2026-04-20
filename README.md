@@ -1,6 +1,6 @@
 # Pemodelan Topik Dinamis
 
-Pemodelan Topik Dinamis terhadap unggahan dan stance analysist komentar
+Pemodelan Topik Dinamis terhadap unggahan media sosial X dan stance analysist terhadap komentar pada kebijakan luar negeri
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://pemodelan-topik-dinamis.streamlit.app/)
 
