@@ -1,9 +1,16 @@
 streamlit
 pandas
+numpy
 scipy
+smart_open
 scikit-learn
 plotly
-bertopic
+bertopic==0.15.0
+sentence-transformers
+umap-learn
+hdbscan
+transformers
+torch
 wordcloud
 matplotlib
 gensim
