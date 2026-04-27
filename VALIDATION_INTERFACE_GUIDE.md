@@ -2,7 +2,95 @@
 
 ## Overview
 
-File ini menjelaskan implementasi UI untuk expert validation dalam Streamlit app.
+File ini menjelaskan implementasi UI untuk expert validation dalam Streamlit app, termasuk fitur interaktif terbaru untuk presentasi dan evaluasi.
+
+---
+
+## 🎨 New Interactive UI Features (April 2026)
+
+### 1. Interactive Data Filters
+**Location:** Sidebar (muncul setelah analisis selesai)
+
+**Implementation:**
+```python
+# Sidebar filters untuk real-time filtering
+if st.session_state.get('analysis_done', False):
+    st.sidebar.header("📊 Data Filters")
+    
+    # Topic filter
+    available_topics = sorted([t for t in posts_df['Topik'].unique() if t != -1])
+    selected_topics = st.sidebar.multiselect("Filter by Topics", available_topics, default=available_topics)
+    
+    # Stance filter  
+    available_stances = sorted(comments_df['sentiment'].unique())
+    selected_stances = st.sidebar.multiselect("Filter by Stance", available_stances, default=available_stances)
+    
+    # Confidence threshold
+    min_confidence = st.sidebar.slider("Minimum Confidence Score", 0.0, 1.0, 0.0, 0.05)
+    
+    # Apply filters
+    if st.sidebar.button("🔄 Apply Filters"):
+        st.session_state['filters_applied'] = True
+```
+
+**Usage for Validation:**
+- Filter data untuk fokus pada topik tertentu
+- Exclude low-confidence predictions
+- Compare results across different stance categories
+
+### 2. Word Clouds per Topic
+**Location:** Main content area, setelah Topics Over Time
+
+**Implementation:**
+```python
+st.subheader("☁️ Word Clouds per Topic")
+topic_model = st.session_state.get('topic_model')
+
+if topic_model:
+    available_topics = [t for t in topic_model.get_topics().keys() if t != -1]
+    selected_topic_wc = st.selectbox("Select Topic for Word Cloud", available_topics)
+    
+    if selected_topic_wc:
+        topic_words = topic_model.get_topic(selected_topic_wc)
+        word_freq = {word: weight for word, weight in topic_words}
+        
+        wordcloud = WordCloud(width=800, height=400, background_color='white', colormap='viridis').generate_from_frequencies(word_freq)
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.imshow(wordcloud, interpolation='bilinear')
+        ax.axis('off')
+        st.pyplot(fig)
+```
+
+**Usage for Validation:**
+- Visual assessment of topic coherence
+- Identify representative keywords
+- Compare topic quality across different topics
+
+### 3. Sample Comments Display
+**Location:** Main content area, dalam Sentiment Analysis section
+
+**Implementation:**
+```python
+st.subheader("📝 Sample Comments by Sentiment")
+
+# Interactive sentiment selector
+selected_sentiment = st.selectbox("Select sentiment to view sample comments:", sentiment_counts.index)
+
+if selected_sentiment:
+    sentiment_comments = filtered_comments_df[filtered_comments_df['sentiment'] == selected_sentiment]['full_text_comments']
+    sample_comments = sentiment_comments.sample(min(5, len(sentiment_comments)), random_state=42)
+    
+    for idx, comment in enumerate(sample_comments, 1):
+        with st.expander(f"💬 Sample {idx}"):
+            st.write(comment)
+            preprocessed = filtered_comments_df[filtered_comments_df['full_text_comments'] == comment]['full_text_comments_preprocessed'].iloc[0]
+            st.markdown(f"**Preprocessed:** {preprocessed}")
+```
+
+**Usage for Validation:**
+- Manual verification of stance classification accuracy
+- Quality assessment of preprocessing pipeline
+- Identify edge cases and misclassifications
 
 ---
 

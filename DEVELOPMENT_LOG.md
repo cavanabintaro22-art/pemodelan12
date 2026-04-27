@@ -8,11 +8,56 @@ Dokumentasi lengkap setiap step pengembangan yang telah diterapkan pada project 
 - **Repository:** rintisyona-design/DTM
 - **Branch:** main
 - **Status:** Active Development
-- **Updated:** April 24, 2026
+- **Updated:** April 27, 2026
 
 ---
 
 ## 🎯 Enhancements Applied
+
+### ENHANCEMENT #7: UI/UX Enhancements untuk Presentasi
+**Status:** ✅ COMPLETED
+
+**Deskripsi:**
+Menambahkan tiga fitur interaktif utama untuk meningkatkan nilai presentasi dan kemudahan evaluasi aplikasi Streamlit.
+
+**Perubahan pada `streamlit_app.py`:**
+```python
+# Sidebar Filters (muncul setelah analysis done)
+if st.session_state.get('analysis_done', False) and app_mode == "Analisis":
+    st.sidebar.header("📊 Data Filters")
+    # Multi-select untuk topics, stances, confidence slider
+    # Apply/Reset buttons
+
+# Word Clouds per Topic
+st.subheader("☁️ Word Clouds per Topic")
+selected_topic_wc = st.selectbox("Select Topic for Word Cloud", available_topics)
+# Generate word cloud dengan WordCloud library
+
+# Interactive Sample Comments
+selected_sentiment = st.selectbox("Select sentiment to view sample comments:", sentiment_counts.index)
+# Tampilkan sampel komentar acak dengan expander
+```
+
+**Dependencies Update:**
+```txt
+# requirements.txt
+wordcloud
+matplotlib
+plotly>=5.13.0  # already exists
+```
+
+**Fitur Detail:**
+1. **Interactive Filters**: Sidebar dengan multi-select dan slider untuk real-time filtering
+2. **Word Clouds**: Visualisasi kata kunci per topik dengan color coding
+3. **Sample Comments**: Click-to-view sampel komentar untuk validasi model
+
+**Benefit:**
+- ✓ **Presentasi Value**: Interaktivitas tinggi untuk demonstrasi
+- ✓ **Model Validation**: Mudah verifikasi klasifikasi dengan sampel
+- ✓ **User Experience**: Drill-down analysis capabilities
+- ✓ **Visual Appeal**: Word clouds memberikan insight visual topik
+
+---
 
 ### ENHANCEMENT #1: Progress Bar & Status Tracking
 **Status:** ✅ COMPLETED

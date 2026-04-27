@@ -4,6 +4,47 @@
 
 ---
 
+## ✅ Step 10: UI/UX Enhancements untuk Presentasi & Evaluasi
+**Tanggal:** April 27, 2026
+
+### Perubahan:
+- **Interactive Data Filters**: Tambah sidebar filters untuk memfilter grafik berdasarkan Topik, Stance, dan Confidence Score
+- **Word Clouds per Topic**: Tambah visualisasi Word Cloud untuk setiap topik BERTopic dengan selector dropdown
+- **Clickable Sample Comments**: Ganti bar chart statis dengan Plotly interaktif + fitur tampilkan sampel komentar acak
+- **Filter Integration**: Semua visualisasi (sentiment distribution, confidence charts, data tables) menggunakan filtered data
+- **Dependencies Update**: Tambah `wordcloud` dan `matplotlib` ke requirements.txt
+
+### File yang berubah:
+- `streamlit_app.py`: Tambah sidebar filters, word clouds, interactive charts, dan sample comments display
+- `requirements.txt`: Tambah wordcloud dan matplotlib
+
+### Fitur Baru:
+1. **📊 Sidebar Filters** (muncul setelah analisis selesai):
+   - Multi-select untuk Topik tertentu
+   - Multi-select untuk Stance (POSITIVE/NEGATIVE/NEUTRAL)
+   - Slider untuk minimum Confidence Score
+   - Apply/Reset buttons dengan real-time update
+
+2. **☁️ Word Clouds per Topic**:
+   - Dropdown selector untuk pilih topik
+   - Word cloud dengan colormap viridis
+   - Expandable section untuk top words & weights
+
+3. **📝 Sample Comments Display**:
+   - Interactive Plotly bar chart untuk sentiment distribution
+   - Selectbox untuk pilih kategori sentiment
+   - Tampilkan 5 sampel komentar acak (original + preprocessed)
+   - Expandable sections untuk setiap sampel
+
+### Dampak:
+- Meningkatkan nilai presentasi dengan interaktivitas tinggi
+- Memudahkan validasi model dengan sample comments
+- User experience lebih baik untuk analisis mendalam
+- Visualisasi word clouds membantu pemahaman topik
+- Foundation untuk demonstrasi yang lebih efektif
+
+---
+
 ## ✅ Step 9: Optimisasi Stance Analysis - Confidence Threshold
 **Tanggal:** April 25, 2026
 
