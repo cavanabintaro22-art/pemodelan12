@@ -11,8 +11,6 @@ import logging
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
-from gensim.models import CoherenceModel
-from gensim.corpora import Dictionary
 import numpy as np
 import os
 
@@ -75,6 +73,13 @@ def calculate_topic_coherence(_topic_model, _docs, coherence_type='c_v'):
         dict: Coherence scores for each topic and overall average
     """
     logging.info(f"Calculating topic coherence with {coherence_type} measure")
+    
+    try:
+        from gensim.models import CoherenceModel
+        from gensim.corpora import Dictionary
+    except ImportError as e:
+        logging.error(f"Gensim not available: {e}")
+        return {"error": "Gensim library not available. Please install gensim to calculate coherence."}
     
     try:
         # Get topics from BERTopic model
@@ -1374,6 +1379,9 @@ Dibuat pada: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
                     
                     **Metode yang digunakan:** C_V (Context Vector)
                     """)
+            else:
+                st.error(f"❌ Gagal menghitung coherence: {coherence_results['error']}")
+                st.info("💡 Pastikan library gensim terinstall dengan benar untuk fitur coherence evaluation.")
             else:
                 st.error(f"Error calculating coherence: {coherence_results['error']}")
             
