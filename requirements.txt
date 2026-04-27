@@ -13,4 +13,3 @@ transformers
 torch
 wordcloud
 matplotlib
-gensim
