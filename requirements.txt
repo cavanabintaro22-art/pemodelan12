@@ -1,11 +1,12 @@
 streamlit
 pandas
-numpy
-scipy
-smart_open
+numpy<2.0.0
+scipy>=1.7.0
+smart_open>=1.8.1
 scikit-learn
 plotly
 bertopic
+gensim==4.3.2
 sentence-transformers
 umap-learn
 hdbscan
