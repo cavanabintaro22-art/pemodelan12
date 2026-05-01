@@ -345,6 +345,8 @@ def initialize_expert_validation_state():
         st.session_state['expert_topic_annotations'] = []
     if 'analysis_done' not in st.session_state:
         st.session_state['analysis_done'] = False
+    if 'uploaded_file_name' not in st.session_state:
+        st.session_state['uploaded_file_name'] = None
 
 
 def _export_validation_to_csv(data):
@@ -627,6 +629,10 @@ def display_data_statistics(df):
         st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
 if uploaded_file:
+    if st.session_state.get('uploaded_file_name') != uploaded_file.name:
+        st.session_state['uploaded_file_name'] = uploaded_file.name
+        st.session_state['analysis_done'] = False
+
     df = pd.read_csv(uploaded_file)
 
     st.subheader("Preview Data")
@@ -775,10 +781,12 @@ if uploaded_file:
         docs = posts_df['full_text_preprocessed'].astype(str).tolist()
         timestamps = posts_df['created_at'].tolist()
         
-        st.success("✅ Preprocessing selesai! Siap untuk analisis.")
+        st.success("✅ Preprocessing selesai! Analisis berjalan otomatis setelah preprocessing.")
         st.divider()
 
-        if st.button("🚀 Jalankan Analisis"):
+        run_analysis = not st.session_state.get('analysis_done', False)
+        if run_analysis:
+            st.info("🔄 Menjalankan analisis otomatis. Mohon tunggu beberapa saat...")
             logging.info("Starting analysis: Topic Modeling and Stance Analysis")
             
             # Setup results directory
