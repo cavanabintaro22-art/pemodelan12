@@ -8,6 +8,7 @@ from datetime import datetime
 import re
 import string
 import logging
+import math
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
@@ -58,10 +59,9 @@ def cached_topics_over_time(_topic_model, _docs, _timestamps, _nr_bins=20):
     logging.info("Completed topics over time calculation")
     return result
 
-@st.cache_data
 def calculate_topic_coherence(_topic_model, _docs, coherence_type='c_v'):
     """
-    Calculate topic coherence using gensim CoherenceModel
+    Calculate topic coherence using gensim CoherenceModel if available, else fallback.
     
     Args:
         _topic_model: Fitted BERTopic model
@@ -76,71 +76,94 @@ def calculate_topic_coherence(_topic_model, _docs, coherence_type='c_v'):
     try:
         from gensim.models import CoherenceModel
         from gensim.corpora import Dictionary
+        gensim_available = True
     except ImportError as e:
-        error_msg = f"Gensim import failed: {str(e)}\nPlease ensure gensim>=4.4.0 and scipy==1.13.1 are installed."
-        logging.error(error_msg)
-        return {"error": error_msg}
+        logging.warning(f"Gensim not available: {e}. Falling back to native coherence approximation.")
+        gensim_available = False
     
-    try:
-        # Get topics from BERTopic model
-        topics = _topic_model.get_topics()
-        
-        # Filter out outlier topic (-1)
-        topics = {k: v for k, v in topics.items() if k != -1}
-        
-        if not topics:
-            logging.warning("No valid topics found for coherence calculation")
-            return {"error": "No valid topics found"}
-        
-        # Prepare documents for coherence calculation
-        # Tokenize documents
-        tokenized_docs = [doc.split() for doc in _docs if doc.strip()]
-        
-        # Create dictionary
-        dictionary = Dictionary(tokenized_docs)
-        
-        # Filter out words that appear in less than 5 documents or more than 50% of documents
-        dictionary.filter_extremes(no_below=5, no_above=0.5)
-        
-        # Create corpus
-        corpus = [dictionary.doc2bow(doc) for doc in tokenized_docs]
-        
-        # Prepare topic words for coherence calculation
-        topic_words = []
-        for topic_id in sorted(topics.keys()):
-            # Get top 10 words for each topic
-            words = [word for word, _ in topics[topic_id][:10]]
-            topic_words.append(words)
-        
-        # Calculate coherence
-        coherence_model = CoherenceModel(
-            topics=topic_words,
-            texts=tokenized_docs,
-            corpus=corpus,
-            dictionary=dictionary,
-            coherence=coherence_type
-        )
-        
-        # Get coherence score for each topic
-        topic_coherences = coherence_model.get_coherence_per_topic()
-        
-        # Calculate overall coherence
-        overall_coherence = coherence_model.get_coherence()
-        
-        # Prepare results
-        results = {
-            'overall_coherence': overall_coherence,
-            'topic_coherences': topic_coherences,
-            'coherence_type': coherence_type,
-            'num_topics': len(topic_words)
-        }
-        
-        logging.info(f"Coherence calculation completed: {overall_coherence:.4f}")
-        return results
-        
-    except Exception as e:
-        logging.error(f"Error calculating coherence: {e}")
-        return {"error": str(e)}
+    # Get topics from BERTopic model
+    topics = _topic_model.get_topics()
+    topics = {k: v for k, v in topics.items() if k != -1}
+    
+    if not topics:
+        logging.warning("No valid topics found for coherence calculation")
+        return {"error": "No valid topics found"}
+    
+    tokenized_docs = [doc.split() for doc in _docs if doc.strip()]
+    if not tokenized_docs:
+        logging.warning("No valid documents passed for coherence calculation")
+        return {"error": "No valid documents provided"}
+    
+    topic_words = []
+    for topic_id in sorted(topics.keys()):
+        words = [word for word, _ in topics[topic_id][:10]]
+        topic_words.append(words)
+    
+    if gensim_available:
+        try:
+            dictionary = Dictionary(tokenized_docs)
+            dictionary.filter_extremes(no_below=5, no_above=0.5)
+            corpus = [dictionary.doc2bow(doc) for doc in tokenized_docs]
+            coherence_model = CoherenceModel(
+                topics=topic_words,
+                texts=tokenized_docs,
+                corpus=corpus,
+                dictionary=dictionary,
+                coherence=coherence_type
+            )
+            topic_coherences = coherence_model.get_coherence_per_topic()
+            overall_coherence = coherence_model.get_coherence()
+            results = {
+                'overall_coherence': overall_coherence,
+                'topic_coherences': topic_coherences,
+                'coherence_type': coherence_type,
+                'num_topics': len(topic_words),
+                'coherence_backend': 'gensim'
+            }
+            logging.info(f"Coherence calculation completed with gensim: {overall_coherence:.4f}")
+            return results
+        except Exception as e:
+            logging.warning(f"Gensim coherence failed, falling back: {e}")
+    
+    # Fallback coherence calculation without gensim
+    cooccurrence_counts = {}
+    doc_freq = {}
+    for doc in tokenized_docs:
+        unique_words = set(doc)
+        for word in unique_words:
+            doc_freq[word] = doc_freq.get(word, 0) + 1
+        for i in range(len(doc)):
+            for j in range(i + 1, len(doc)):
+                pair = tuple(sorted([doc[i], doc[j]]))
+                cooccurrence_counts[pair] = cooccurrence_counts.get(pair, 0) + 1
+    
+    topic_coherences = []
+    for words in topic_words:
+        if len(words) < 2:
+            topic_coherences.append(0.0)
+            continue
+        pair_scores = []
+        for i in range(len(words)):
+            for j in range(i + 1, len(words)):
+                w1, w2 = words[i], words[j]
+                pair = tuple(sorted([w1, w2]))
+                co_occur = cooccurrence_counts.get(pair, 0)
+                if doc_freq.get(w1, 0) > 0 and doc_freq.get(w2, 0) > 0:
+                    score = math.log((co_occur + 1) / (doc_freq[w1] * doc_freq[w2] + 1))
+                else:
+                    score = 0.0
+                pair_scores.append(score)
+        topic_coherences.append(sum(pair_scores) / len(pair_scores) if pair_scores else 0.0)
+    overall_coherence = sum(topic_coherences) / len(topic_coherences) if topic_coherences else 0.0
+    
+    logging.info(f"Fallback coherence calculation completed: {overall_coherence:.4f}")
+    return {
+        'overall_coherence': overall_coherence,
+        'topic_coherences': topic_coherences,
+        'coherence_type': coherence_type,
+        'num_topics': len(topic_words),
+        'coherence_backend': 'fallback'
+    }
 
 @st.cache_data
 def calculate_topic_metrics(_topic_model, _docs):
@@ -1443,6 +1466,8 @@ Dibuat pada: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
                 coherence_results = calculate_topic_coherence(topic_model, docs)
             
             if "error" not in coherence_results:
+                if coherence_results.get('coherence_backend') == 'fallback':
+                    st.info("⚠️ Gensim tidak tersedia. Menggunakan fallback coherence approximation tanpa gensim.")
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
@@ -1522,7 +1547,7 @@ Dibuat pada: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
                     """)
             else:
                 st.error(f"❌ Gagal menghitung coherence: {coherence_results['error']}")
-                st.info("💡 Pastikan library gensim terinstall dengan benar untuk fitur coherence evaluation.")
+                st.info("💡 Jika gensim tidak terpasang, app akan menghitung coherence dengan fallback native. Pastikan dataset dan topik valid.")
             
             # ========== ADDITIONAL TOPIC METRICS ==========
             st.subheader("📈 Additional Topic Modeling Metrics")
