@@ -14,4 +14,3 @@ matplotlib
 Cython
 nltk
 Sastrawi
-gensim
