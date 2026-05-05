@@ -16,6 +16,9 @@ import plotly.graph_objects as go
 import numpy as np
 import os
 import time
+import hashlib
+import pickle
+import json
 
 # Optional Indonesian NLP support
 try:
@@ -93,6 +96,86 @@ def load_sentiment_model():
     model = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
     logging.info("Completed load_sentiment_model")
     return model
+
+
+def get_file_hash(uploaded_file):
+    """Return a short SHA256 hash for the uploaded file contents."""
+    try:
+        file_bytes = uploaded_file.read()
+        uploaded_file.seek(0)
+        return hashlib.sha256(file_bytes).hexdigest()[:16]
+    except Exception as e:
+        logging.warning(f"Could not hash uploaded file: {e}")
+        return None
+
+
+def get_cache_dir(file_hash):
+    if not file_hash:
+        return None
+    cache_dir = os.path.join("results", f"cache_{file_hash}")
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+
+def load_cached_analysis(cache_dir):
+    """Load cached analysis results for a previously processed file."""
+    try:
+        required_files = [
+            "analysis_complete.json",
+            "posts_preprocessed.csv",
+            "comments_preprocessed.csv",
+            "topic_model.pkl",
+            "topic_validation.csv",
+            "topic_docs_mapping.json"
+        ]
+        for filename in required_files:
+            if not os.path.exists(os.path.join(cache_dir, filename)):
+                logging.info(f"Cached analysis missing required file: {filename}")
+                return None
+
+        posts_df = pd.read_csv(os.path.join(cache_dir, "posts_preprocessed.csv"))
+        comments_df = pd.read_csv(os.path.join(cache_dir, "comments_preprocessed.csv"))
+        with open(os.path.join(cache_dir, "topic_model.pkl"), "rb") as f:
+            topic_model = pickle.load(f)
+        topic_validation_df = pd.read_csv(os.path.join(cache_dir, "topic_validation.csv"))
+        with open(os.path.join(cache_dir, "topic_docs_mapping.json"), "r", encoding="utf-8") as f:
+            topic_docs_mapping = json.load(f)
+
+        return {
+            'posts_df': posts_df,
+            'comments_df': comments_df,
+            'topic_model': topic_model,
+            'topic_validation_df': topic_validation_df,
+            'topic_docs_mapping': topic_docs_mapping
+        }
+    except Exception as e:
+        logging.warning(f"Could not load cached analysis: {e}")
+        return None
+
+
+def save_analysis_cache(cache_dir, posts_df, comments_df, topic_model, topic_validation_df, topic_docs_mapping):
+    if not cache_dir:
+        return
+
+    posts_df.to_csv(os.path.join(cache_dir, "posts_preprocessed.csv"), index=False)
+    comments_df.to_csv(os.path.join(cache_dir, "comments_preprocessed.csv"), index=False)
+
+    try:
+        with open(os.path.join(cache_dir, "topic_model.pkl"), "wb") as f:
+            pickle.dump(topic_model, f)
+    except Exception as e:
+        logging.warning(f"Could not pickle topic model: {e}")
+
+    topic_validation_df.to_csv(os.path.join(cache_dir, "topic_validation.csv"), index=False)
+    with open(os.path.join(cache_dir, "topic_docs_mapping.json"), "w", encoding="utf-8") as f:
+        json.dump(topic_docs_mapping, f)
+
+    with open(os.path.join(cache_dir, "analysis_complete.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            'saved_at': datetime.now().isoformat(),
+            'cached': True
+        }, f)
+
 
 def cached_fit_transform(_topic_model, _docs):
     """Wrapper for BERTopic fit_transform"""
@@ -700,9 +783,30 @@ def display_data_statistics(df):
         st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
 if uploaded_file:
+    file_hash = get_file_hash(uploaded_file)
+    cache_dir = get_cache_dir(file_hash)
+    st.session_state['uploaded_file_hash'] = file_hash
+    st.session_state['cache_dir'] = cache_dir
+
     if st.session_state.get('uploaded_file_name') != uploaded_file.name:
         st.session_state['uploaded_file_name'] = uploaded_file.name
         st.session_state['analysis_done'] = False
+
+    cache_available = cache_dir is not None and os.path.exists(os.path.join(cache_dir, "analysis_complete.json"))
+    if cache_available and not st.session_state.get('analysis_done', False):
+        st.info("Hasil analisis sebelumnya tersedia untuk dataset ini. Klik tombol untuk melanjutkan tanpa mengulang proses.")
+        if st.button("🔄 Lanjutkan dari hasil terakhir", key="load_cached_analysis"):
+            cache_loaded = load_cached_analysis(cache_dir)
+            if cache_loaded:
+                st.session_state['analysis_done'] = True
+                st.session_state['posts_df'] = cache_loaded['posts_df']
+                st.session_state['comments_df'] = cache_loaded['comments_df']
+                st.session_state['topic_model'] = cache_loaded['topic_model']
+                st.session_state['topic_validation_df'] = cache_loaded['topic_validation_df']
+                st.session_state['topic_docs_mapping'] = cache_loaded['topic_docs_mapping']
+                st.success("Berhasil memuat hasil analisis sebelumnya.")
+            else:
+                st.error("Gagal memuat cache. Analisis akan dijalankan ulang.")
 
     df = pd.read_csv(uploaded_file)
 
@@ -861,7 +965,7 @@ if uploaded_file:
             logging.info("Starting analysis: Topic Modeling and Stance Analysis")
             
             # Setup results directory
-            results_dir = "results"
+            results_dir = st.session_state.get('cache_dir') or "results"
             os.makedirs(results_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
@@ -1155,15 +1259,17 @@ if uploaded_file:
             # Save topic validation
             topic_validation_df.to_csv(os.path.join(results_dir, f"topic_validation_{timestamp}.csv"), index=False)
             
+            # Save cached analysis files for faster resume
+            save_analysis_cache(results_dir, posts_df.copy(), comments_df.copy(), topic_model, topic_validation_df, topic_docs_mapping)
+
             # Calculate and save coherence
             coherence_results = calculate_topic_coherence(topic_model, docs)
-            import json
-            with open(os.path.join(results_dir, f"coherence_results_{timestamp}.json"), "w") as f:
+            with open(os.path.join(results_dir, f"coherence_results_{timestamp}.json"), "w", encoding="utf-8") as f:
                 json.dump(coherence_results, f)
             
             # Calculate and save topic metrics
             topic_metrics = calculate_topic_metrics(topic_model, docs)
-            with open(os.path.join(results_dir, f"topic_metrics_{timestamp}.json"), "w") as f:
+            with open(os.path.join(results_dir, f"topic_metrics_{timestamp}.json"), "w", encoding="utf-8") as f:
                 json.dump(topic_metrics, f)
             
             st.success(f"✅ Semua hasil analisis telah disimpan ke folder '{results_dir}'!")
