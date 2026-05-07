@@ -61,7 +61,7 @@ def analyze_topics(file):
 
         print("🤖 Loading models...")
         embedding = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-        vectorizer = CountVectorizer(ngram_range=(1, 2), min_df=2, max_df=0.9)
+        vectorizer = CountVectorizer(ngram_range=(1, 2), min_df=1, max_df=0.95)
         umap_model = UMAP(n_neighbors=15, n_components=5, min_dist=0.0, metric='cosine', random_state=42)
         hdbscan_model = HDBSCAN(min_cluster_size=10, metric='euclidean', cluster_selection_method='eom', prediction_data=True)
         representation = MaximalMarginalRelevance(diversity=0.3)
