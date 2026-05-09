@@ -22,6 +22,8 @@ import time
 import hashlib
 import pickle
 import json
+import plotly.graph_objects as go
+import plotly.express as px
 
 # Optional Indonesian NLP support
 try:
