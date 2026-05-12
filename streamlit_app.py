@@ -494,6 +494,217 @@ def convert_figure_to_html(fig):
     return fig.to_html().encode('utf-8')
 
 
+def analyze_viral_spread(df):
+    """
+    Analyze viral spread patterns by identifying duplicate posts and their metadata.
+    Returns analysis of how posts spread across different users and timestamps.
+    """
+    logging.info("Starting viral spread analysis")
+    
+    if 'full_text' not in df.columns or 'created_at' not in df.columns:
+        return None
+    
+    try:
+        # Get duplicate posts
+        value_counts = df['full_text'].value_counts()
+        viral_posts = value_counts[value_counts > 1].reset_index()
+        viral_posts.columns = ['text', 'count']
+        
+        if len(viral_posts) == 0:
+            logging.warning("No viral posts found")
+            return None
+        
+        # Convert timestamp
+        df['created_at_parsed'] = pd.to_datetime(df['created_at'], errors='coerce')
+        
+        # Prepare viral posts data with spread details
+        viral_data = []
+        for idx, row in viral_posts.iterrows():
+            text = row['text']
+            count = row['count']
+            
+            # Get all instances of this post
+            instances = df[df['full_text'] == text].copy()
+            
+            # Extract timeline info
+            instances_sorted = instances.sort_values('created_at_parsed')
+            time_span = (instances_sorted['created_at_parsed'].max() - 
+                        instances_sorted['created_at_parsed'].min()).total_seconds() / 3600  # in hours
+            
+            # Count unique users
+            unique_users = instances['username'].nunique()
+            
+            viral_data.append({
+                'text': text[:80],
+                'full_text': text,
+                'total_reposts': count,
+                'unique_users': unique_users,
+                'time_span_hours': time_span if time_span > 0 else 0.1,
+                'spread_rate': count / max(time_span, 0.1),  # reposts per hour
+                'first_post': instances_sorted['created_at_parsed'].min(),
+                'last_post': instances_sorted['created_at_parsed'].max()
+            })
+        
+        viral_df = pd.DataFrame(viral_data)
+        viral_df = viral_df.sort_values('total_reposts', ascending=False)
+        
+        logging.info(f"Found {len(viral_df)} viral posts")
+        return viral_df
+    
+    except Exception as e:
+        logging.error(f"Error in viral spread analysis: {e}")
+        return None
+
+
+def visualize_viral_timeline(df, viral_posts_info):
+    """
+    Create interactive timeline visualization of viral posts.
+    Shows when viral posts are shared over time.
+    """
+    try:
+        df['created_at_parsed'] = pd.to_datetime(df['created_at'], errors='coerce')
+        
+        # Create hourly distribution for top viral posts
+        top_viral = viral_posts_info.head(5)
+        
+        fig = go.Figure()
+        
+        for idx, post in enumerate(top_viral.iterrows()):
+            post_data = post[1]
+            text = post_data['full_text']
+            
+            # Get all instances of this post with timestamps
+            instances = df[df['full_text'] == text].copy()
+            instances['hour'] = instances['created_at_parsed'].dt.floor('H')
+            hourly_spread = instances.groupby('hour').size().reset_index(name='count')
+            hourly_spread = hourly_spread.sort_values('hour')
+            
+            fig.add_trace(go.Scatter(
+                x=hourly_spread['hour'],
+                y=hourly_spread['count'],
+                mode='markers+lines',
+                name=f"Post {idx+1}: {post_data['total_reposts']}x reposts",
+                marker=dict(size=8),
+                hovertemplate='<b>Time:</b> %{x}<br><b>Reposts:</b> %{y}<extra></extra>'
+            ))
+        
+        fig.update_layout(
+            title="🔥 Viral Posts Timeline - Penyebaran per Jam",
+            xaxis_title="Waktu (Jam)",
+            yaxis_title="Jumlah Repost Baru",
+            hovermode='x unified',
+            height=400,
+            template='plotly_white'
+        )
+        
+        return fig
+    
+    except Exception as e:
+        logging.error(f"Error in viral timeline: {e}")
+        return None
+
+
+def visualize_viral_heatmap(df):
+    """
+    Create heatmap showing retweet distribution by hour and day.
+    """
+    try:
+        df['created_at_parsed'] = pd.to_datetime(df['created_at'], errors='coerce')
+        df['hour'] = df['created_at_parsed'].dt.hour
+        df['day'] = df['created_at_parsed'].dt.day_name()
+        
+        # Create pivot table for heatmap
+        heatmap_data = df.groupby(['day', 'hour']).size().reset_index(name='count')
+        
+        # Order days properly
+        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        heatmap_data['day'] = pd.Categorical(heatmap_data['day'], categories=day_order, ordered=True)
+        heatmap_pivot = heatmap_data.pivot(index='day', columns='hour', values='count').fillna(0)
+        
+        fig = go.Figure(data=go.Heatmap(
+            z=heatmap_pivot.values,
+            x=heatmap_pivot.columns,
+            y=heatmap_pivot.index,
+            colorscale='YlOrRd',
+            hovertemplate='Hari: %{y}<br>Jam: %{x}:00<br>Posts: %{z:.0f}<extra></extra>'
+        ))
+        
+        fig.update_layout(
+            title="🔥 Heatmap Aktivitas Post - Hari vs Jam",
+            xaxis_title="Jam (24 jam)",
+            yaxis_title="Hari",
+            height=400,
+            coloraxis_colorbar=dict(title="Jumlah Posts")
+        )
+        
+        return fig
+    
+    except Exception as e:
+        logging.error(f"Error in heatmap: {e}")
+        return None
+
+
+def visualize_viral_statistics(viral_posts_info):
+    """
+    Create statistics visualizations for viral posts.
+    """
+    try:
+        if viral_posts_info is None or len(viral_posts_info) == 0:
+            return None, None
+        
+        top_n = min(10, len(viral_posts_info))
+        
+        # Chart 1: Repost frequency
+        fig1 = go.Figure(data=[
+            go.Bar(
+                x=viral_posts_info.head(top_n)['text'],
+                y=viral_posts_info.head(top_n)['total_reposts'],
+                marker_color='indianred',
+                text=viral_posts_info.head(top_n)['total_reposts'],
+                textposition='auto'
+            )
+        ])
+        
+        fig1.update_layout(
+            title=f"🔥 Top {top_n} Most Viral Posts (Repost Count)",
+            xaxis_title="Post Content (First 80 chars)",
+            yaxis_title="Number of Reposts",
+            height=400,
+            showlegend=False,
+            xaxis_tickangle=-45
+        )
+        
+        # Chart 2: Unique users vs reposts scatter
+        fig2 = go.Figure(data=go.Scatter(
+            x=viral_posts_info['unique_users'],
+            y=viral_posts_info['total_reposts'],
+            mode='markers',
+            marker=dict(
+                size=viral_posts_info['spread_rate'].clip(upper=50),
+                color=viral_posts_info['spread_rate'],
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(title="Spread Rate<br>(posts/hr)")
+            ),
+            text=viral_posts_info['text'],
+            hovertemplate='<b>%{text}</b><br>Users: %{x}<br>Reposts: %{y}<extra></extra>'
+        ))
+        
+        fig2.update_layout(
+            title="📊 Viral Spread Analysis - Users vs Reposts",
+            xaxis_title="Unique Users",
+            yaxis_title="Total Reposts",
+            height=400,
+            template='plotly_white'
+        )
+        
+        return fig1, fig2
+    
+    except Exception as e:
+        logging.error(f"Error in viral statistics: {e}")
+        return None, None
+
+
 def initialize_expert_validation_state():
     if 'expert_stance_annotations' not in st.session_state:
         st.session_state['expert_stance_annotations'] = []
@@ -783,6 +994,91 @@ def display_data_statistics(df):
         
         stats_df = pd.DataFrame(stats_data)
         st.dataframe(stats_df, use_container_width=True, hide_index=True)
+        
+        # ========== VIRAL SPREAD METRICS DALAM DETAIL STATISTIK ==========
+        st.divider()
+        st.subheader("🔥 Analisis Penyebaran Viral Posts")
+        
+        try:
+            # Kalkulasi metrics
+            df_clean = df.dropna(subset=['full_text'])
+            total_rows = len(df_clean)
+            unique_texts = df_clean['full_text'].nunique()
+            duplicate_count = total_rows - unique_texts
+            
+            # Hitung viral posts
+            value_counts = df_clean['full_text'].value_counts()
+            viral_posts = value_counts[value_counts > 1]
+            num_viral_posts = len(viral_posts)
+            
+            # Hitung unique users yang mereposts
+            if 'username' in df_clean.columns:
+                total_users_viral = 0
+                for text in viral_posts.index:
+                    users = df_clean[df_clean['full_text'] == text]['username'].nunique()
+                    total_users_viral += users
+                avg_users_per_post = total_users_viral / max(num_viral_posts, 1)
+            else:
+                avg_users_per_post = 0
+            
+            # Hitung spread rate
+            if 'created_at' in df_clean.columns:
+                df_clean['created_at_parsed'] = pd.to_datetime(df_clean['created_at'], errors='coerce')
+                max_spread_rate = 0
+                for text in viral_posts.index[:5]:  # Top 5
+                    instances = df_clean[df_clean['full_text'] == text]
+                    instances_sorted = instances.sort_values('created_at_parsed')
+                    time_span = (instances_sorted['created_at_parsed'].max() - 
+                                instances_sorted['created_at_parsed'].min()).total_seconds() / 3600
+                    if time_span > 0:
+                        rate = len(instances) / time_span
+                        max_spread_rate = max(max_spread_rate, rate)
+            else:
+                max_spread_rate = 0
+            
+            # Display metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    "🔥 Posts Viral",
+                    f"{num_viral_posts}",
+                    help="Unique posts yang di-retweet >1x"
+                )
+            
+            with col2:
+                st.metric(
+                    "🔄 Total Reposts",
+                    f"{duplicate_count:,}",
+                    help="Total instances dari viral posts"
+                )
+            
+            with col3:
+                st.metric(
+                    "👥 Avg Users/Post",
+                    f"{avg_users_per_post:.0f}",
+                    help="Rata-rata users yang mereposts per post"
+                )
+            
+            with col4:
+                st.metric(
+                    "⚡ Max Spread Rate",
+                    f"{max_spread_rate:.1f}/hr",
+                    help="Reposts per jam tertinggi"
+                )
+            
+            # Insight text
+            st.info(f"""
+            💡 **Insight**: Dataset ini mengandung **{duplicate_count:,} duplikat posts** 
+            yang merupakan **retweets** (bukan error data). Ini menunjukkan bahwa 
+            **{num_viral_posts} pesan unik** tersebar di kalangan **{int(total_users_viral)} users berbeda**, 
+            dengan kecepatan penyebaran maksimal **{max_spread_rate:.1f} posts/jam**. 
+            Analisis viral spread lengkap tersedia di section "🔥 Analisis Penyebaran Viral Posts".
+            """)
+            
+        except Exception as e:
+            logging.warning(f"Error calculating viral metrics: {e}")
+            st.info("💡 Viral metrics belum bisa dihitung. Jalankan analisis lengkap untuk detail lebih lanjut.")
 
 if uploaded_file:
     file_hash = get_file_hash(uploaded_file)
@@ -1713,6 +2009,124 @@ Dibuat pada: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
                     mime="text/plain",
                     key="download_report"
                 )
+            
+            # ========== VIRAL SPREAD ANALYSIS ==========
+            st.divider()
+            st.subheader("🔥 Analisis Penyebaran Viral Posts")
+            st.write("Analisis bagaimana posts yang sama (retweets) menyebar di kalangan berbeda pengguna.")
+            
+            with st.spinner("Menganalisis pola penyebaran viral posts..."):
+                viral_posts_info = analyze_viral_spread(df)
+            
+            if viral_posts_info is not None and len(viral_posts_info) > 0:
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric(
+                        "🔥 Posts Viral",
+                        f"{len(viral_posts_info)}",
+                        help="Jumlah unique posts yang muncul >1 kali"
+                    )
+                
+                with col2:
+                    total_reposts = viral_posts_info['total_reposts'].sum()
+                    st.metric(
+                        "🔄 Total Repost",
+                        f"{total_reposts:,}",
+                        help="Total instances dari viral posts"
+                    )
+                
+                with col3:
+                    avg_users = viral_posts_info['unique_users'].mean()
+                    st.metric(
+                        "👥 Rata-rata Users",
+                        f"{avg_users:.0f}",
+                        help="Rata-rata users yang mereposts per post"
+                    )
+                
+                with col4:
+                    max_spread_rate = viral_posts_info['spread_rate'].max()
+                    st.metric(
+                        "⚡ Max Spread Rate",
+                        f"{max_spread_rate:.1f}/hr",
+                        help="Repost per jam tertinggi"
+                    )
+                
+                # Tabs for different visualizations
+                tab1, tab2, tab3, tab4 = st.tabs([
+                    "📊 Statistik Top Posts",
+                    "⏱️ Timeline Penyebaran",
+                    "🔥 Heatmap Aktivitas",
+                    "📋 Tabel Viral Posts"
+                ])
+                
+                with tab1:
+                    st.write("**Top Posts dengan Repost Terbanyak**")
+                    fig1, fig2 = visualize_viral_statistics(viral_posts_info)
+                    
+                    if fig1:
+                        st.plotly_chart(fig1, use_container_width=True)
+                    if fig2:
+                        st.write("**Scatter: Unique Users vs Total Reposts** (bubble size = spread rate)")
+                        st.plotly_chart(fig2, use_container_width=True)
+                
+                with tab2:
+                    st.write("**Timeline Penyebaran Top 5 Viral Posts**")
+                    fig_timeline = visualize_viral_timeline(df, viral_posts_info)
+                    if fig_timeline:
+                        st.plotly_chart(fig_timeline, use_container_width=True)
+                    else:
+                        st.warning("Tidak dapat membuat timeline visualization")
+                
+                with tab3:
+                    st.write("**Kapan Posts Paling Banyak Dibagikan?**")
+                    fig_heatmap = visualize_viral_heatmap(df)
+                    if fig_heatmap:
+                        st.plotly_chart(fig_heatmap, use_container_width=True)
+                    else:
+                        st.warning("Tidak dapat membuat heatmap")
+                
+                with tab4:
+                    st.write("**Daftar Lengkap Viral Posts**")
+                    
+                    # Display table with sortable columns
+                    display_df = viral_posts_info[[
+                        'text', 'total_reposts', 'unique_users', 'time_span_hours', 'spread_rate'
+                    ]].copy()
+                    display_df.columns = ['Post Text', 'Reposts', 'Users', 'Hours Span', 'Rate/Hr']
+                    display_df['Rate/Hr'] = display_df['Rate/Hr'].round(2)
+                    display_df['Hours Span'] = display_df['Hours Span'].round(2)
+                    
+                    st.dataframe(display_df, use_container_width=True, hide_index=True)
+                    
+                    # Download button
+                    st.download_button(
+                        label="💾 Download Viral Posts Analysis (CSV)",
+                        data=convert_df_to_csv(display_df),
+                        file_name=f"viral_posts_analysis_{timestamp}.csv",
+                        mime="text/csv",
+                        key="download_viral_posts"
+                    )
+                
+                # Insights
+                with st.expander("💡 Insight dari Analisis Viral"):
+                    st.markdown("""
+                    **Apa yang ditunjukkan data ini:**
+                    
+                    - **Posts Viral**: Post unik yang di-retweet oleh banyak orang berbeda
+                    - **Repost**: Saat seseorang membagikan ulang post yang sama (persis) ke followers mereka
+                    - **Unique Users**: Berapa banyak user berbeda yang mereposts post tersebut
+                    - **Time Span**: Berapa lama (dalam jam) post tersebar dari post pertama hingga terakhir
+                    - **Spread Rate**: Seberapa cepat post menyebar (reposts per jam)
+                    
+                    **Interpretasi:**
+                    - Spread Rate tinggi = post menyebar dengan cepat/viral
+                    - Unique Users banyak = post mendapat reach luas
+                    - Time Span panjang = post terus di-retweet dalam periode waktu lama
+                    """)
+            else:
+                st.info("💡 Tidak ada posts yang di-retweet / viral untuk dianalisis.")
             
             # ========== TOPIC COHERENCE EVALUATION ==========
             st.subheader("🎯 Topic Coherence Evaluation")
