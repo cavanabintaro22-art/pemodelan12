@@ -101,9 +101,20 @@ def load_embedding_model():
 @st.cache_resource
 def load_sentiment_model():
     logging.info("Starting load_sentiment_model")
-    model = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
-    logging.info("Completed load_sentiment_model")
-    return model
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            model = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
+            logging.info("Completed load_sentiment_model")
+            return model
+        except Exception as e:
+            logging.warning(f"Attempt {attempt + 1}/{max_retries} failed to load sentiment model: {e}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(2)  # Wait before retry
+            else:
+                logging.error(f"Failed to load sentiment model after {max_retries} attempts")
+                raise e
 
 
 def get_file_hash(uploaded_file):
@@ -1397,8 +1408,14 @@ if uploaded_file:
         comments_df = df[comment_cols].dropna(subset=['full_text_comments'])
 
         st.info("Memuat model...")
-        embedding_model = load_embedding_model()
-        sentiment_model = load_sentiment_model()
+        try:
+            embedding_model = load_embedding_model()
+            sentiment_model = load_sentiment_model()
+        except Exception as e:
+            st.error(f"❌ Gagal memuat model: {str(e)}")
+            st.error("Ini mungkin disebabkan oleh masalah koneksi internet atau server Hugging Face sedang sibuk.")
+            st.info("💡 Solusi: Coba refresh halaman atau tunggu beberapa menit sebelum mencoba lagi.")
+            st.stop()
         
         # ========== PREPROCESSING SECTION ==========
         st.divider()
@@ -1927,7 +1944,13 @@ if uploaded_file:
             processed = 0
             
             with st.spinner('🤖 Sedang membedah opini masyarakat...'):
-                sentiments, confidences = cached_stance_analysis(sentiment_model, comments_list, batch_size)
+                try:
+                    sentiments, confidences = cached_stance_analysis(sentiment_model, comments_list, batch_size)
+                except Exception as e:
+                    st.error(f"❌ Gagal melakukan analisis stance: {str(e)}")
+                    st.error("Ini mungkin disebabkan oleh masalah koneksi atau model sentiment tidak dapat diproses.")
+                    st.info("💡 Coba lagi nanti atau periksa koneksi internet Anda.")
+                    st.stop()
                 
                 # Simulate progress updates (since cached function doesn't update UI)
                 for i in range(0, total_comments, batch_size):
