@@ -2144,10 +2144,44 @@ if uploaded_file:
 
             # Tampilkan hasil
             if not post_stance_df.empty:
-                st.subheader("📋 Hasil Stance Analysis per Postingan")
-                display_cols = ['conversation_id_str', 'Topik', 'period_3m', 'post_stance',
-                              'stance_confidence', 'num_comments']
-                st.dataframe(post_stance_df[display_cols].head(20), use_container_width=True)
+                st.subheader("📋 Hasil Stance Analysis per Topik per Periode 3 Bulan")
+                st.markdown("Ringkasan topik per kuartal dengan distribusi stance komentar untuk setiap topik.")
+
+                topic_period_stance = post_stance_df.groupby(['period_3m', 'Topik', 'post_stance']).size().reset_index(name='count')
+                topic_period_stance = topic_period_stance[topic_period_stance['Topik'] != -1]
+
+                if not topic_period_stance.empty:
+                    summary_df = topic_period_stance.pivot_table(
+                        index=['period_3m', 'Topik'],
+                        columns='post_stance',
+                        values='count',
+                        fill_value=0
+                    ).reset_index()
+                    summary_df.columns.name = None
+
+                    # Add topic names if available
+                    if topic_model is not None:
+                        try:
+                            topic_info = topic_model.get_topic_info()
+                            topic_names = topic_info.set_index('Topic')['Name'].to_dict()
+                            summary_df['Topic Name'] = summary_df['Topik'].map(topic_names).fillna('N/A')
+                        except Exception:
+                            summary_df['Topic Name'] = 'N/A'
+                    else:
+                        summary_df['Topic Name'] = 'N/A'
+
+                    # Reorder columns for readability
+                    cols = ['period_3m', 'Topik', 'Topic Name'] + [c for c in ['NEGATIVE', 'NEUTRAL', 'POSITIVE'] if c in summary_df.columns]
+                    summary_df = summary_df[cols]
+                    st.dataframe(summary_df.sort_values(['period_3m', 'Topik']), use_container_width=True)
+                else:
+                    st.info('Tidak ada data stance yang valid untuk ditampilkan dalam format per periode-topik.')
+
+                # Tambahkan detail per postingan di expander
+                with st.expander('Detail Hasil Stance per Postingan'):
+                    display_cols = ['conversation_id_str', 'Topik', 'period_3m', 'post_stance',
+                                  'stance_confidence', 'num_comments']
+                    st.dataframe(post_stance_df[display_cols].head(50), use_container_width=True)
 
                 # Statistik stance per topik
                 if 'Topik' in post_stance_df.columns:
