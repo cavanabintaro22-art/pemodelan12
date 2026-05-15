@@ -692,35 +692,41 @@ def render_vertical_report(posts_df, comments_df, topic_model, months_per_period
                 continue
 
             # Tampilkan komentar satu per satu dengan badge stance
+            lower_cols = {col.lower(): col for col in related_comments.columns}
             comment_col = None
-            for col_name in ['full_text_comments', 'full_text_comments_preprocessed', 'comment', 'full_text']:
-                if col_name in related_comments.columns:
-                    comment_col = col_name
+            for search_name in ['full_text_comments', 'full_text_comments_preprocessed', 'comment', 'full_text']:
+                if search_name in lower_cols:
+                    comment_col = lower_cols[search_name]
                     break
+            if comment_col is None:
+                # Coba kolom yang berisi kata 'comment' atau 'komentar'
+                for col in related_comments.columns:
+                    if 'comment' in col.lower() or 'komentar' in col.lower():
+                        comment_col = col
+                        break
 
             stance_col = None
-            for col_name in ['stance', 'sentiment', 'post_stance', 'model_stance']:
-                if col_name in related_comments.columns:
-                    stance_col = col_name
+            for search_name in ['stance', 'sentiment', 'post_stance', 'model_stance']:
+                if search_name in lower_cols:
+                    stance_col = lower_cols[search_name]
                     break
+            if stance_col is None:
+                for col in related_comments.columns:
+                    if 'stance' in col.lower() or 'sentimen' in col.lower() or 'sentiment' in col.lower():
+                        stance_col = col
+                        break
 
             if comment_col is None:
                 st.write("Komentar tersedia tetapi kolom teks komentar tidak ditemukan.")
                 st.markdown("---")
                 continue
 
-            if stance_col is None:
-                st.write("Komentar tersedia tetapi kolom stance tidak ditemukan.")
-                st.markdown("---")
-                continue
-
             st.markdown("**Komentar dan Analisis Stance:**")
             for _, row in related_comments.iterrows():
                 komentar = str(row.get(comment_col, '') or '').strip()
-                stance_val = str(row.get(stance_col, '') or '').strip()
+                stance_val = str(row.get(stance_col, '') or '').strip() if stance_col else ''
 
                 # Format dan map stance value ke badge yang konsisten
-                stance_label = stance_val
                 stance_key = stance_val.lower().strip()
                 if stance_key in ['pro', 'positive', 'pos', 'positif']:
                     bg_color = '#28a745'
@@ -730,10 +736,14 @@ def render_vertical_report(posts_df, comments_df, topic_model, months_per_period
                     bg_color = '#dc3545'
                     text_color = '#ffffff'
                     stance_label = 'Kontra'
+                elif stance_key in ['neutral', 'netral']:
+                    bg_color = '#ffc107'
+                    text_color = '#212529'
+                    stance_label = 'Netral'
                 else:
                     bg_color = '#ffc107'
                     text_color = '#212529'
-                    stance_label = stance_val if stance_val else 'Netral'
+                    stance_label = 'Menunggu Analisis' if stance_val == '' else stance_val
 
                 safe_comment = html.escape(komentar).replace('\n', '<br>')
                 safe_stance = html.escape(stance_label)
