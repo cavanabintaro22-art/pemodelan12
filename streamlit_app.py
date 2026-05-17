@@ -642,7 +642,14 @@ def render_vertical_report(posts_df, comments_df, topic_model, months_per_period
 
         # Header periode
         period_label = f"Periode: {period.start_time.strftime('%b %Y')} - {period.end_time.strftime('%b %Y')}"
-        st.header(period_label)
+        st.markdown(
+            f"""
+            <div style="border:1px solid #d1d5db; border-radius:12px; padding:14px 18px; margin-bottom:12px; background-color:#ffffff;">
+                <strong style="font-size:1.1rem; color:#111827;">{html.escape(period_label)}</strong>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
         # Get topics present in this period
         topics_in_period = period_posts['Topik'].dropna().unique().tolist()
