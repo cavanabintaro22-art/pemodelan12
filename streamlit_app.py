@@ -2330,7 +2330,7 @@ if uploaded_file:
                                     title=f'Heatmap {stance} Stance: Topik vs Periode',
                                     labels=dict(x="Periode 3 Bulan", y="Topik", color="Jumlah Postingan")
                                 )
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, use_container_width=True, key=f'heatmap_{stance}')
 
                 st.download_button(
                     label="💾 Simpan Hasil Stance per Postingan (CSV)",
