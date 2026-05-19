@@ -2337,7 +2337,7 @@ if uploaded_file:
                     data=convert_df_to_csv(post_stance_df),
                     file_name="stance_per_postingan.csv",
                     mime="text/csv",
-                    key="download_stance_per_post"
+                    key="download_stance_per_post_summary"
                 )
 
             else:
@@ -2476,7 +2476,7 @@ if uploaded_file:
                     data=convert_df_to_csv(post_stance_df),
                     file_name="stance_per_postingan.csv",
                     mime="text/csv",
-                    key="download_stance_per_post"
+                    key="download_stance_per_post_full"
                 )
 
             else:
