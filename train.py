@@ -7,7 +7,13 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    precision_recall_fscore_support,
+)
 from sklearn.model_selection import train_test_split
 from torch import nn
 import torch
@@ -93,11 +99,143 @@ def compute_class_weights(class_counts: np.ndarray) -> torch.Tensor:
 def format_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     return {
         "accuracy": accuracy_score(y_true, y_pred),
+        "precision_macro": float(precision_recall_fscore_support(y_true, y_pred, average="macro", zero_division=0)[0]),
+        "recall_macro": float(precision_recall_fscore_support(y_true, y_pred, average="macro", zero_division=0)[1]),
         "macro_f1": f1_score(y_true, y_pred, average="macro", zero_division=0),
     }
 
 
-class FocalLoss(nn.Module):
+def collect_probs_and_labels(
+    model: AutoModelForSequenceClassification,
+    dataloader: DataLoader,
+    device: torch.device,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    model.eval()
+    all_probs: List[np.ndarray] = []
+    all_labels: List[int] = []
+    all_preds: List[int] = []
+    with torch.no_grad():
+        for batch in dataloader:
+            inputs = {
+                "input_ids": batch["input_ids"].to(device),
+                "attention_mask": batch["attention_mask"].to(device),
+                "token_type_ids": batch["token_type_ids"].to(device),
+            }
+            outputs = model(**inputs)
+            probs = torch.softmax(outputs.logits, dim=-1)
+            preds = torch.argmax(probs, dim=-1)
+            all_probs.append(probs.cpu().numpy())
+            all_labels.extend(batch["labels"].cpu().numpy().tolist())
+            all_preds.extend(preds.cpu().numpy().tolist())
+    return np.concatenate(all_probs, axis=0), np.array(all_labels, dtype=int), np.array(all_preds, dtype=int)
+
+
+def compute_per_class_metrics(y_true: np.ndarray, y_pred: np.ndarray, labels: List[int]) -> pd.DataFrame:
+    precision, recall, f1, support = precision_recall_fscore_support(
+        y_true,
+        y_pred,
+        labels=labels,
+        zero_division=0,
+    )
+    return pd.DataFrame(
+        {
+            "label_id": labels,
+            "label": [ID2LABEL[label] for label in labels],
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "support": support,
+        }
+    )
+
+
+def save_confusion_matrix_heatmap(cm: np.ndarray, labels: List[str], output_path: str) -> None:
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(cm, interpolation="nearest", cmap="Blues")
+    ax.figure.colorbar(im, ax=ax)
+
+    ax.set(
+        xticks=np.arange(len(labels)),
+        yticks=np.arange(len(labels)),
+        xticklabels=labels,
+        yticklabels=labels,
+        ylabel="True label",
+        xlabel="Predicted label",
+        title="Confusion Matrix",
+    )
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+
+    thresh = cm.max() / 2.0
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(
+                j,
+                i,
+                format(int(cm[i, j]), "d"),
+                ha="center",
+                va="center",
+                color="white" if cm[i, j] > thresh else "black",
+            )
+
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
+
+
+def save_error_analysis(
+    df: pd.DataFrame,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    probs: np.ndarray,
+    output_dir: str,
+) -> None:
+    df = df.copy()
+    df["true_label_id"] = y_true
+    df["pred_label_id"] = y_pred
+    df["true_label"] = df["true_label_id"].map(ID2LABEL)
+    df["pred_label"] = df["pred_label_id"].map(ID2LABEL)
+    df["pred_confidence"] = probs.max(axis=1)
+    df["correct"] = df["true_label_id"] == df["pred_label_id"]
+
+    def classify_error(row):
+        if row["correct"]:
+            return "correct"
+        if row["true_label_id"] != 1 and row["pred_label_id"] == 1:
+            return "miss_non_neutral_as_neutral"
+        if row["true_label_id"] == 1 and row["pred_label_id"] != 1:
+            return "neutral_as_non_neutral"
+        if row["true_label_id"] == 0 and row["pred_label_id"] == 2:
+            return "against_as_support"
+        if row["true_label_id"] == 2 and row["pred_label_id"] == 0:
+            return "support_as_against"
+        return "other_mistake"
+
+    df["error_type"] = df.apply(classify_error, axis=1)
+    os.makedirs(output_dir, exist_ok=True)
+    df.to_csv(os.path.join(output_dir, "error_analysis.csv"), index=False)
+
+    top_errors = df[df["error_type"] != "correct"].sort_values(
+        ["error_type", "pred_confidence"], ascending=[True, False]
+    )
+    top_errors.head(20).to_csv(os.path.join(output_dir, "top_error_examples.csv"), index=False)
+
+    summary = []
+    summary.append("Error analysis summary")
+    summary.append(f"Total examples: {len(df)}")
+    summary.append(f"Total errors: {len(df) - df['correct'].sum()}")
+    summary.append("Error type counts:")
+    for error_type, count in df[~df["correct"]]["error_type"].value_counts().items():
+        summary.append(f"- {error_type}: {count}")
+    summary.append("")
+    summary.append("Top 5 false negatives to neutral:")
+    for _, row in top_errors[top_errors["error_type"] == "miss_non_neutral_as_neutral"].head(5).iterrows():
+        summary.append(
+            f"  - true={row['true_label']} pred={row['pred_label']} conf={row['pred_confidence']:.3f} post={row['post_text'][:80]} comment={row['comment_text'][:80]}"
+        )
+    with open(os.path.join(output_dir, "error_analysis_summary.txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(summary))
     def __init__(self, alpha: Optional[torch.Tensor] = None, gamma: float = 2.0, reduction: str = "mean"):
         super().__init__()
         self.alpha = alpha
@@ -390,11 +528,21 @@ def train(
                 print("Early stopping triggered.")
                 break
 
-    probs, labels = collect_probs_and_labels(model, val_loader, device)
+    probs, all_labels, all_preds = collect_probs_and_labels(model, val_loader, device)
     thresholds = np.arange(0.50, 0.96, 0.05)
     print("\n=== Threshold analysis for neutral decision ===")
-    best_threshold, best_threshold_f1, threshold_preds = threshold_analysis(probs, labels, thresholds)
+    best_threshold, best_threshold_f1, threshold_preds = threshold_analysis(probs, all_labels, thresholds)
     print(f"Best neutral threshold: {best_threshold:.2f} with macro F1 = {best_threshold_f1:.4f}")
+
+    per_class_df = compute_per_class_metrics(all_labels, all_preds, labels=list(LABEL2ID.values()))
+    per_class_path = Path(output_dir) / "per_class_metrics.csv"
+    per_class_df.to_csv(per_class_path, index=False)
+
+    cm = confusion_matrix(all_labels, all_preds, labels=list(LABEL2ID.values()))
+    cm_path = Path(output_dir) / "confusion_matrix.png"
+    save_confusion_matrix_heatmap(cm, [ID2LABEL[i] for i in sorted(LABEL2ID)], str(cm_path))
+
+    save_error_analysis(val_df, all_labels, all_preds, probs, str(Path(output_dir) / "error_analysis"))
 
     with open(Path(output_dir) / "training_metadata.json", "w", encoding="utf-8") as f:
         json.dump(
@@ -410,6 +558,15 @@ def train(
             indent=2,
             ensure_ascii=False,
         )
+
+    print("\n=== Research Evaluation ===")
+    print(f"Macro precision: {per_class_df['precision'].mean():.4f}")
+    print(f"Macro recall:    {per_class_df['recall'].mean():.4f}")
+    print(f"Macro F1:        {per_class_df['f1'].mean():.4f}")
+    print("Per-class performance:")
+    print(per_class_df.to_string(index=False))
+    print(f"Confusion matrix saved to: {cm_path}")
+    print(f"Error analysis saved to: {Path(output_dir) / 'error_analysis'}")
     print_report(y_true, y_pred)
     _display_example_predictions(model, tokenizer, val_df, device)
     print(f"Training complete. Best validation macro F1: {best_macro_f1:.4f}")
