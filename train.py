@@ -10,10 +10,14 @@ import torch
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from sklearn.model_selection import train_test_split
 from torch import nn
+import torch
 import torch.nn.functional as F
+from torch.cuda.amp import GradScaler, autocast
+from torch.nn.utils import clip_grad_norm_
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from transformers import (
+    AutoConfig,
     AutoModelForSequenceClassification,
     AutoTokenizer,
     get_linear_schedule_with_warmup,
@@ -174,6 +178,8 @@ def train_one_epoch(
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     loss_fn: nn.Module,
     device: torch.device,
+    scaler: Optional[GradScaler] = None,
+    max_grad_norm: float = 1.0,
 ) -> float:
     model.train()
     running_loss = 0.0
@@ -185,10 +191,21 @@ def train_one_epoch(
             "labels": batch["labels"].to(device),
         }
         optimizer.zero_grad()
-        outputs = model(**inputs)
-        loss = loss_fn(outputs.logits, inputs["labels"])
-        loss.backward()
-        optimizer.step()
+        if scaler is not None:
+            with autocast():
+                outputs = model(**inputs)
+                loss = loss_fn(outputs.logits, inputs["labels"])
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            clip_grad_norm_(model.parameters(), max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(**inputs)
+            loss = loss_fn(outputs.logits, inputs["labels"])
+            loss.backward()
+            clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
         scheduler.step()
         running_loss += loss.item() * inputs["labels"].size(0)
 
@@ -286,21 +303,33 @@ def train(
     epochs: int = 6,
     train_batch_size: int = 16,
     eval_batch_size: int = 32,
-    learning_rate: float = 3e-5,
+    learning_rate: float = 2e-5,
     max_length: int = 256,
     val_ratio: float = 0.15,
     patience: int = 2,
     seed: int = 42,
     use_focal_loss: bool = False,
     focal_gamma: float = 2.0,
+    max_grad_norm: float = 1.0,
+    dropout_prob: float = 0.1,
+    fp16: bool = False,
 ) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
     df = load_dataframe(data_path)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=len(LABEL2ID))
+    config = AutoConfig.from_pretrained(MODEL_NAME, num_labels=len(LABEL2ID))
+    if hasattr(config, "hidden_dropout_prob"):
+        config.hidden_dropout_prob = dropout_prob
+    if hasattr(config, "classifier_dropout"):
+        config.classifier_dropout = dropout_prob
+    model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, config=config)
     model.to(device)
+
+    scaler = GradScaler() if fp16 and device.type == "cuda" else None
+    if fp16 and device.type != "cuda":
+        print("FP16 enabled but CUDA unavailable. Running in FP32.")
 
     train_loader, val_loader, class_counts, val_df = build_dataloaders(
         df,
@@ -331,7 +360,16 @@ def train(
     best_model_path = Path(output_dir) / "best_model"
 
     for epoch in range(1, epochs + 1):
-        train_loss = train_one_epoch(model, train_loader, optimizer, scheduler, loss_fn, device)
+        train_loss = train_one_epoch(
+            model,
+            train_loader,
+            optimizer,
+            scheduler,
+            loss_fn,
+            device,
+            scaler=scaler,
+            max_grad_norm=max_grad_norm,
+        )
         val_loss, val_metrics, y_true, y_pred = evaluate(model, val_loader, loss_fn, device)
 
         print(f"\nEpoch {epoch}/{epochs}")
@@ -385,11 +423,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=6)
     parser.add_argument("--train-batch-size", type=int, default=16)
     parser.add_argument("--eval-batch-size", type=int, default=32)
-    parser.add_argument("--learning-rate", type=float, default=3e-5)
+    parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--max-length", type=int, default=256)
     parser.add_argument("--val-ratio", type=float, default=0.15)
     parser.add_argument("--patience", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max-grad-norm", type=float, default=1.0, help="Gradient clipping max norm")
+    parser.add_argument("--dropout-prob", type=float, default=0.1, help="Dropout probability for IndoBERT")
+    parser.add_argument("--fp16", action="store_true", help="Use mixed precision training when CUDA is available")
     parser.add_argument("--use-focal-loss", action="store_true", help="Use focal loss to reduce majority neutral bias")
     parser.add_argument("--focal-gamma", type=float, default=2.0, help="Focal loss gamma parameter")
     return parser.parse_args()
@@ -408,6 +449,9 @@ if __name__ == "__main__":
         val_ratio=args.val_ratio,
         patience=args.patience,
         seed=args.seed,
+        max_grad_norm=args.max_grad_norm,
+        dropout_prob=args.dropout_prob,
+        fp16=args.fp16,
         use_focal_loss=args.use_focal_loss,
         focal_gamma=args.focal_gamma,
     )

@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 from torch.nn.functional import softmax
@@ -45,6 +45,40 @@ class StancePairClassifier:
             "label": ID2LABEL[label_id],
             "probabilities": {ID2LABEL[i]: float(probs[i]) for i in range(len(probs))},
         }
+
+    def predict_batch(
+        self,
+        posts: List[str],
+        comments: List[str],
+        batch_size: int = 16,
+    ) -> Tuple[List[int], List[Dict[str, float]]]:
+        assert len(posts) == len(comments), "Posts and comments lists must have the same length."
+        label_ids: List[int] = []
+        probabilities: List[Dict[str, float]] = []
+
+        for start_idx in range(0, len(posts), batch_size):
+            batch_posts = [clean_indonesian_text(text) for text in posts[start_idx : start_idx + batch_size]]
+            batch_comments = [clean_indonesian_text(text) for text in comments[start_idx : start_idx + batch_size]]
+            encoding = self.tokenizer(
+                text=batch_posts,
+                text_pair=batch_comments,
+                truncation=True,
+                padding="max_length",
+                max_length=256,
+                return_tensors="pt",
+            )
+            encoding = {k: v.to(self.device) for k, v in encoding.items()}
+
+            with torch.no_grad():
+                outputs = self.model(**encoding)
+                probs_batch = softmax(outputs.logits, dim=-1).cpu().numpy()
+                preds = probs_batch.argmax(axis=-1).tolist()
+
+            for label_id, prob_scores in zip(preds, probs_batch):
+                label_ids.append(int(label_id))
+                probabilities.append({ID2LABEL[i]: float(prob_scores[i]) for i in range(len(prob_scores))})
+
+        return label_ids, probabilities
 
 
 def predict_stance(post: str, comment: str, model_dir: Optional[str] = None) -> Dict[str, object]:
