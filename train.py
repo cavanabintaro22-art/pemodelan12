@@ -10,6 +10,7 @@ import torch
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from sklearn.model_selection import train_test_split
 from torch import nn
+import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from transformers import (
@@ -90,6 +91,80 @@ def format_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
         "accuracy": accuracy_score(y_true, y_pred),
         "macro_f1": f1_score(y_true, y_pred, average="macro", zero_division=0),
     }
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha: Optional[torch.Tensor] = None, gamma: float = 2.0, reduction: str = "mean"):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        log_probs = F.log_softmax(inputs, dim=-1)
+        probs = torch.exp(log_probs)
+        targets = targets.view(-1, 1)
+        pt = probs.gather(1, targets).squeeze(1)
+        log_pt = log_probs.gather(1, targets).squeeze(1)
+        focal_term = (1 - pt) ** self.gamma
+        loss = -focal_term * log_pt
+        if self.alpha is not None:
+            alpha_factor = self.alpha[targets.squeeze(1)].to(inputs.device)
+            loss = alpha_factor * loss
+        if self.reduction == "mean":
+            return loss.mean()
+        if self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+
+def _apply_neutral_threshold(probs: np.ndarray, threshold: float) -> np.ndarray:
+    predictions = []
+    for prob in probs:
+        if prob[1] >= threshold:
+            predictions.append(1)
+        else:
+            non_neutral = np.array([prob[0], prob[2]])
+            label = int(np.argmax(non_neutral) * 2)
+            predictions.append(label)
+    return np.array(predictions, dtype=int)
+
+
+def threshold_analysis(probs: np.ndarray, labels: np.ndarray, thresholds: np.ndarray) -> Tuple[float, float, np.ndarray]:
+    best_threshold = 0.0
+    best_macro_f1 = -1.0
+    best_predictions = np.array([], dtype=int)
+    for threshold in thresholds:
+        preds = _apply_neutral_threshold(probs, threshold)
+        score = f1_score(labels, preds, average="macro", zero_division=0)
+        print(f"Threshold {threshold:.2f} -> macro F1: {score:.4f}")
+        if score > best_macro_f1:
+            best_macro_f1 = score
+            best_threshold = threshold
+            best_predictions = preds
+    return best_threshold, best_macro_f1, best_predictions
+
+
+def collect_probs_and_labels(
+    model: AutoModelForSequenceClassification,
+    dataloader: DataLoader,
+    device: torch.device,
+) -> Tuple[np.ndarray, np.ndarray]:
+    model.eval()
+    all_probs: List[np.ndarray] = []
+    all_labels: List[int] = []
+    with torch.no_grad():
+        for batch in dataloader:
+            inputs = {
+                "input_ids": batch["input_ids"].to(device),
+                "attention_mask": batch["attention_mask"].to(device),
+                "token_type_ids": batch["token_type_ids"].to(device),
+            }
+            outputs = model(**inputs)
+            probs = torch.softmax(outputs.logits, dim=-1)
+            all_probs.append(probs.cpu().numpy())
+            all_labels.extend(batch["labels"].cpu().numpy().tolist())
+    return np.concatenate(all_probs, axis=0), np.array(all_labels, dtype=int)
 
 
 def train_one_epoch(
@@ -216,6 +291,8 @@ def train(
     val_ratio: float = 0.15,
     patience: int = 2,
     seed: int = 42,
+    use_focal_loss: bool = False,
+    focal_gamma: float = 2.0,
 ) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -236,7 +313,10 @@ def train(
     )
 
     class_weights = compute_class_weights(class_counts).to(device)
-    loss_fn = nn.CrossEntropyLoss(weight=class_weights)
+    if use_focal_loss:
+        loss_fn = FocalLoss(alpha=class_weights, gamma=focal_gamma)
+    else:
+        loss_fn = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
 
     total_steps = len(train_loader) * epochs
@@ -272,11 +352,19 @@ def train(
                 print("Early stopping triggered.")
                 break
 
+    probs, labels = collect_probs_and_labels(model, val_loader, device)
+    thresholds = np.arange(0.50, 0.96, 0.05)
+    print("\n=== Threshold analysis for neutral decision ===")
+    best_threshold, best_threshold_f1, threshold_preds = threshold_analysis(probs, labels, thresholds)
+    print(f"Best neutral threshold: {best_threshold:.2f} with macro F1 = {best_threshold_f1:.4f}")
+
     with open(Path(output_dir) / "training_metadata.json", "w", encoding="utf-8") as f:
         json.dump(
             {
                 "model_name": MODEL_NAME,
                 "best_macro_f1": best_macro_f1,
+                "best_threshold_macro_f1": best_threshold_f1,
+                "best_neutral_threshold": best_threshold,
                 "class_counts": class_counts.tolist(),
                 "label_map": LABEL2ID,
             },
@@ -302,6 +390,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-ratio", type=float, default=0.15)
     parser.add_argument("--patience", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--use-focal-loss", action="store_true", help="Use focal loss to reduce majority neutral bias")
+    parser.add_argument("--focal-gamma", type=float, default=2.0, help="Focal loss gamma parameter")
     return parser.parse_args()
 
 
@@ -318,4 +408,6 @@ if __name__ == "__main__":
         val_ratio=args.val_ratio,
         patience=args.patience,
         seed=args.seed,
+        use_focal_loss=args.use_focal_loss,
+        focal_gamma=args.focal_gamma,
     )
