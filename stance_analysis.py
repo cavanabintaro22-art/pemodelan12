@@ -69,6 +69,15 @@ def run_stance_analysis_improved(
     if comments_df.empty:
         return comments_df.copy()
     
+    if 'final_stance' in comments_df.columns or 'stance' in comments_df.columns:
+        comments_df = comments_df.copy()
+        if 'stance_confidence' not in comments_df.columns:
+            comments_df['stance_confidence'] = 1.0
+        if 'final_stance' not in comments_df.columns and 'stance' in comments_df.columns:
+            comments_df['final_stance'] = comments_df['stance']
+        logger.info("Using existing manual stance labels; improved stance analysis skipped.")
+        return comments_df
+    
     comments_df = comments_df.copy()
     
     # Initialize analyzer
@@ -105,6 +114,8 @@ def run_stance_analysis_improved(
             comments_df.at[idx, 'stance'] = stance
             comments_df.at[idx, 'stance_confidence'] = confidence
     
+    if 'final_stance' not in comments_df.columns:
+        comments_df['final_stance'] = comments_df['stance']
     logger.info(f"✓ Improved stance analysis complete: {len(comments_df)} comments analyzed")
     return comments_df
 
@@ -134,6 +145,15 @@ def run_stance_analysis(
     
     if comments_df.empty:
         return comments_df.copy()
+    
+    if 'final_stance' in comments_df.columns or 'stance' in comments_df.columns:
+        comments_df = comments_df.copy()
+        if 'stance_confidence' not in comments_df.columns:
+            comments_df['stance_confidence'] = 1.0
+        if 'final_stance' not in comments_df.columns and 'stance' in comments_df.columns:
+            comments_df['final_stance'] = comments_df['stance']
+        logger.info("Using existing manual stance labels; stance prediction skipped.")
+        return comments_df
     
     # ========================================================================
     # IMPROVED ANALYZER (RECOMMENDED)
@@ -181,4 +201,6 @@ def run_stance_analysis(
         comments_df.at[idx, "stance"] = stance
         comments_df.at[idx, "stance_confidence"] = score
 
+    if 'final_stance' not in comments_df.columns:
+        comments_df['final_stance'] = comments_df['stance']
     return comments_df

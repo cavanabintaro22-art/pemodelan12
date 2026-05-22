@@ -7,6 +7,14 @@ from pathlib import Path
 sns.set(style="whitegrid")
 
 
+def _get_stance_column(df: pd.DataFrame) -> str:
+    if 'final_stance' in df.columns:
+        return 'final_stance'
+    if 'stance' in df.columns:
+        return 'stance'
+    return 'final_stance'
+
+
 def plot_topic_distribution(posts_df: pd.DataFrame, output_path: str | Path) -> plt.Figure:
     df = posts_df.copy()
     counts = df["topic_name"].value_counts().sort_values(ascending=True)
@@ -24,7 +32,8 @@ def plot_topic_distribution(posts_df: pd.DataFrame, output_path: str | Path) -> 
 
 def plot_stance_distribution(comments_df: pd.DataFrame, output_path: str | Path) -> plt.Figure:
     df = comments_df.copy()
-    counts = df["stance"].value_counts(normalize=True).mul(100).sort_values(ascending=False)
+    stance_col = _get_stance_column(df)
+    counts = df[stance_col].value_counts(normalize=True).mul(100).sort_values(ascending=False)
     fig, ax = plt.subplots(figsize=(8, 5))
     sns.barplot(x=counts.values, y=counts.index, palette="coolwarm", ax=ax)
     ax.set_title("Distribusi Stance pada Komentar")
@@ -41,7 +50,8 @@ def plot_stance_distribution(comments_df: pd.DataFrame, output_path: str | Path)
 
 def plot_heatmap_topic_stance(merged_df: pd.DataFrame, output_path: str | Path) -> plt.Figure:
     df = merged_df.copy()
-    pivot = df.groupby(["topic_name", "stance"]).size().unstack(fill_value=0)
+    stance_col = _get_stance_column(df)
+    pivot = df.groupby(["topic_name", stance_col]).size().unstack(fill_value=0)
     fig, ax = plt.subplots(figsize=(12, max(6, len(pivot) * 0.4)))
     sns.heatmap(pivot, annot=True, fmt="d", cmap="Blues", ax=ax)
     ax.set_title("Heatmap Topik vs Stance")

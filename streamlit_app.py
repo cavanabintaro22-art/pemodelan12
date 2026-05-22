@@ -717,7 +717,7 @@ def render_vertical_report(posts_df, comments_df, topic_model, months_per_period
                         break
 
             stance_col = None
-            for search_name in ['stance', 'sentiment', 'post_stance', 'model_stance']:
+            for search_name in ['final_stance', 'stance', 'sentiment', 'post_stance', 'model_stance']:
                 if search_name in lower_cols:
                     stance_col = lower_cols[search_name]
                     break
@@ -793,6 +793,39 @@ def _normalize_sentiment_label(label):
     if any(token in label for token in ['POS', 'FAVOR', 'FOR', 'SUPPORT', 'SETUJU']):
         return 'POSITIVE'
     return label
+
+
+def _normalize_final_stance(label):
+    label = str(label).strip()
+    if not label or label.lower() in {'nan', 'none', 'null', 'n/a'}:
+        return ''
+    normalized = label.lower()
+    if normalized in {'pro', 'positive', 'positif', 'support', 'mendukung', 'favor', 'for', 'setuju'}:
+        return 'POSITIVE'
+    if normalized in {'kontra', 'negative', 'negatif', 'against', 'menolak', 'contra', 'tidak', 'no'}:
+        return 'NEGATIVE'
+    if normalized in {'neutral', 'netral', 'net', 'unknown'}:
+        return 'NEUTRAL'
+    return label.upper()
+
+
+def ensure_final_stance_column(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if 'final_stance' in df.columns:
+        df['final_stance'] = df['final_stance'].apply(_normalize_final_stance)
+        return df
+    if 'stance' in df.columns:
+        df['final_stance'] = df['stance']
+    elif 'expert_stance' in df.columns:
+        df['final_stance'] = df['expert_stance']
+    elif 'sentiment' in df.columns:
+        df['final_stance'] = df['sentiment']
+    elif 'predicted_stance' in df.columns:
+        df['final_stance'] = df['predicted_stance']
+    else:
+        df['final_stance'] = ''
+    df['final_stance'] = df['final_stance'].apply(_normalize_final_stance)
+    return df
 
 
 def cached_stance_analysis(_sentiment_model, _comments_list, _batch_size=20):
@@ -1171,7 +1204,7 @@ def render_expert_validation_ui():
         st.subheader("Komentar untuk divalidasi")
         st.write(f"**Original Text:** {row['full_text_comments']}")
         st.write(f"**Preprocessed Text:** {row['full_text_comments_preprocessed']}")
-        st.write(f"**Prediksi Model:** {row.get('sentiment', 'N/A')} (Confidence: {row.get('confidence', 0):.2f})")
+        st.write(f"**Prediksi Model:** {row.get('final_stance', row.get('sentiment', 'N/A'))} (Confidence: {row.get('confidence', 0):.2f})")
 
         expert_stance = st.radio(
             "Expert Stance:",
@@ -1195,7 +1228,7 @@ def render_expert_validation_ui():
                 'comment_row': int(row['index']),
                 'original_text': row['full_text_comments'],
                 'preprocessed_text': row['full_text_comments_preprocessed'],
-                'model_prediction': row.get('sentiment', ''),
+                'model_prediction': row.get('final_stance', row.get('sentiment', '')),
                 'model_confidence': float(row.get('confidence', 0) or 0),
                 'expert_stance': expert_stance,
                 'expert_confidence': expert_confidence,
@@ -1557,8 +1590,8 @@ if uploaded_file:
             )
             
             # Stance Filter
-            if 'sentiment' in comments_df.columns:
-                available_stances = sorted(comments_df['sentiment'].dropna().unique())
+            if 'final_stance' in comments_df.columns:
+                available_stances = sorted(comments_df['final_stance'].dropna().unique())
                 selected_stances = st.sidebar.multiselect(
                     "Filter by Stance",
                     options=available_stances,
@@ -1612,9 +1645,11 @@ if uploaded_file:
 
         # Proses comments untuk stance analysis
         comment_cols = ['conversation_id_str', 'full_text_comments']
-        if 'expert_stance' in df.columns:
-            comment_cols.append('expert_stance')
+        for extra in ['final_stance', 'stance', 'expert_stance', 'sentiment', 'predicted_stance']:
+            if extra in df.columns:
+                comment_cols.append(extra)
         comments_df = df[comment_cols].dropna(subset=['full_text_comments'])
+        comments_df = ensure_final_stance_column(comments_df)
 
         st.info("Memuat model...")
         try:
@@ -1858,6 +1893,11 @@ if uploaded_file:
                     comments_df['confidence'] = confidences
                     comments_df['sentiment'] = comments_df['sentiment'].astype(str).str.upper()
                     comments_df['confidence'] = comments_df['confidence'].astype(float)
+                    if 'final_stance' not in comments_df.columns:
+                        comments_df['final_stance'] = comments_df['sentiment']
+                    else:
+                        comments_df['final_stance'] = comments_df['final_stance'].fillna(comments_df['sentiment'])
+                    comments_df['final_stance'] = comments_df['final_stance'].apply(_normalize_final_stance)
                 else:
                     st.warning("Dataset komentar kosong. Stance analysis komentar dilewati.")
                 logging.info("Calculating topics over time")
@@ -1893,9 +1933,9 @@ if uploaded_file:
                 
                 # Apply filters
                 filtered_posts_df = posts_df[posts_df['Topik'].isin(selected_topics)] if selected_topics else posts_df
-                if selected_stances and 'sentiment' in comments_df.columns and 'confidence' in comments_df.columns:
+                if selected_stances and 'final_stance' in comments_df.columns and 'confidence' in comments_df.columns:
                     filtered_comments_df = comments_df[
-                        (comments_df['sentiment'].isin(selected_stances)) &
+                        (comments_df['final_stance'].isin(selected_stances)) &
                         (comments_df['confidence'] >= min_confidence)
                     ]
                 else:
@@ -2029,12 +2069,12 @@ if uploaded_file:
                     logging.warning(f"Gagal menampilkan laporan vertikal: {e}")
 
                 st.subheader("🔗 Hubungan Post - Topik - Stance")
-                if 'sentiment' in df.columns:
-                    topic_sentiment = df.dropna(subset=['Topik', 'sentiment']).groupby(['Topik', 'sentiment']).size().reset_index(name='Jumlah')
+                if 'final_stance' in comments_df.columns:
+                    topic_sentiment = comments_df.dropna(subset=['Topik', 'final_stance']).groupby(['Topik', 'final_stance']).size().reset_index(name='Jumlah')
                     st.dataframe(topic_sentiment, use_container_width=True)
-                    st.markdown("**Insight:** jumlah post per topik dan sentimen komentar membantu melihat topik mana yang memicu dukungan, penolakan, atau netralitas.")
+                    st.markdown("**Insight:** jumlah post per topik dan final stance komentar membantu melihat topik mana yang memicu dukungan, penolakan, atau netralitas.")
                 else:
-                    st.info("Sentiment belum tersedia. Jalankan stance analysis untuk melihat hubungan post-topik-stance.")
+                    st.info("Final stance belum tersedia. Jalankan stance analysis untuk melihat hubungan post-topik-stance.")
             else:
                 st.error("Topic model is not available. Please run the analysis first.")
                 top_topics_df = pd.DataFrame()  # Create empty dataframe to prevent further errors
@@ -2151,9 +2191,9 @@ if uploaded_file:
                 grouped = comments_df.groupby('conversation_id_str')
                 post_stance_df = grouped.agg(
                     num_comments=('full_text_comments_preprocessed', 'size'),
-                    positive_comments=('sentiment', lambda values: (values == 'POSITIVE').sum()),
-                    negative_comments=('sentiment', lambda values: (values == 'NEGATIVE').sum()),
-                    neutral_comments=('sentiment', lambda values: (values == 'NEUTRAL').sum()),
+                    positive_comments=('final_stance', lambda values: (values == 'POSITIVE').sum()),
+                    negative_comments=('final_stance', lambda values: (values == 'NEGATIVE').sum()),
+                    neutral_comments=('final_stance', lambda values: (values == 'NEUTRAL').sum()),
                     avg_confidence=('confidence', 'mean')
                 ).reset_index()
 
@@ -2200,12 +2240,12 @@ if uploaded_file:
 
                 with st.expander("📌 Tabel Komentar dan Stance", expanded=False):
                     comment_display = comments_df.copy()
-                    display_cols = [col for col in ['conversation_id_str', 'full_text_comments', 'sentiment', 'confidence', 'Topik'] if col in comment_display.columns]
+                    display_cols = [col for col in ['conversation_id_str', 'full_text_comments', 'final_stance', 'confidence', 'Topik'] if col in comment_display.columns]
                     if display_cols:
                         comment_display = comment_display[display_cols].rename(columns={
                             'conversation_id_str': 'Post ID',
                             'full_text_comments': 'Komentar',
-                            'sentiment': 'Stance',
+                            'final_stance': 'Stance',
                             'confidence': 'Confidence',
                             'Topik': 'Topik'
                         })

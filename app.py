@@ -136,7 +136,7 @@ if uploaded_file is not None:
                 )
 
                 df_sample = analyzed_comments.copy()
-                df_sample['Sikap'] = df_sample['stance']
+                df_sample['Sikap'] = df_sample['final_stance'] if 'final_stance' in df_sample.columns else df_sample['stance']
                 df_sample['Confidence'] = df_sample['stance_confidence']
 
             except Exception as e:

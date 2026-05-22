@@ -89,6 +89,14 @@ class TopicStancePipeline:
 
     def predict_stance(self, df: pd.DataFrame, batch_size: int = 16) -> pd.DataFrame:
         df = df.copy()
+        if 'final_stance' in df.columns or 'stance' in df.columns:
+            if 'stance_confidence' not in df.columns:
+                df['stance_confidence'] = 1.0
+            if 'final_stance' not in df.columns and 'stance' in df.columns:
+                df['final_stance'] = df['stance']
+            logger.info("Using existing manual stance labels; stance prediction skipped.")
+            return df
+
         classifier = self.load_stance_classifier()
         label_ids, probabilities = classifier.predict_batch(
             posts=df["post_text"].tolist(),
@@ -99,12 +107,14 @@ class TopicStancePipeline:
         df["stance_label_id"] = label_ids
         df["stance"] = [clean_label(label) for label in labels]
         df["stance_confidence"] = [max(prob.values()) for prob in probabilities]
+        df["final_stance"] = df["stance"]
         return df
 
     @staticmethod
     def aggregate_distribution(df: pd.DataFrame) -> pd.DataFrame:
+        stance_col = "final_stance" if "final_stance" in df.columns else "stance"
         dist = (
-            df.groupby(["topic_id", "topic_name", "stance"])
+            df.groupby(["topic_id", "topic_name", stance_col])
             .size()
             .reset_index(name="count")
         )
@@ -118,7 +128,10 @@ class TopicStancePipeline:
         batch_size: int = 16,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         df = pd.read_csv(input_csv, dtype=str, keep_default_na=False)
-        df = df[["full_text", "full_text_comments"]].copy()
+        required_columns = ["full_text", "full_text_comments"]
+        if "stance" in df.columns:
+            required_columns.append("stance")
+        df = df[required_columns].copy()
         df = df.dropna(subset=["full_text", "full_text_comments"])  # ensure both sides
         df["full_text"] = df["full_text"].astype(str)
         df["full_text_comments"] = df["full_text_comments"].astype(str)
