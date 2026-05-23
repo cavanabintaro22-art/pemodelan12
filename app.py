@@ -57,7 +57,11 @@ if uploaded_file is not None:
     # Membaca dataset
     df = pd.read_csv(uploaded_file)
     st.write("### Pratinjau Data Awal")
-    st.dataframe(df[['conversation_id_str', 'full_text', 'full_text_comments']].head())
+    preview_cols = ['conversation_id_str', 'full_text', 'full_text_comments']
+    if 'stance' in df.columns:
+        preview_cols.append('stance')
+        st.info("Kolom 'stance' terdeteksi. Dataset akan menggunakan nilai 'stance' yang sudah ada.")
+    st.dataframe(df[preview_cols].head())
 
     if st.button("Jalankan Proses Analisis"):
 
@@ -128,14 +132,21 @@ if uploaded_file is not None:
                     }
                 )[['post_id', 'clean_text']]
 
-                analyzed_comments = run_stance_analysis(
-                    posts_df=posts_for_stance,
-                    comments_df=df_sample,
-                    confidence_threshold=0.45,
-                    use_improved=True,
-                )
+                if 'stance' in df_sample.columns or 'final_stance' in df_sample.columns:
+                    st.info("Menggunakan nilai stance yang sudah ada pada dataset.")
+                    if 'stance_confidence' not in df_sample.columns:
+                        df_sample['stance_confidence'] = 1.0
+                    if 'final_stance' not in df_sample.columns and 'stance' in df_sample.columns:
+                        df_sample['final_stance'] = df_sample['stance']
+                else:
+                    analyzed_comments = run_stance_analysis(
+                        posts_df=posts_for_stance,
+                        comments_df=df_sample,
+                        confidence_threshold=0.45,
+                        use_improved=True,
+                    )
+                    df_sample = analyzed_comments.copy()
 
-                df_sample = analyzed_comments.copy()
                 df_sample['Sikap'] = df_sample['final_stance'] if 'final_stance' in df_sample.columns else df_sample['stance']
                 df_sample['Confidence'] = df_sample['stance_confidence']
 
