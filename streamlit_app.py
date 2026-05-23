@@ -1711,6 +1711,12 @@ if uploaded_file:
         docs = posts_df['full_text_preprocessed'].astype(str).tolist()
         timestamps = posts_df['created_at'].tolist()
         
+        # Validasi ukuran dataset
+        n_docs = len(docs)
+        if n_docs < 3:
+            st.error(f"❌ Dataset terlalu kecil ({n_docs} dokumen). Minimal 3 dokumen diperlukan untuk topic modeling.")
+            st.stop()
+        
         st.success("✅ Preprocessing selesai! Analisis berjalan otomatis setelah preprocessing.")
         st.divider()
 
@@ -1740,21 +1746,45 @@ if uploaded_file:
                 progress_bar.progress(0.25)
                 logging.info("Initializing BERTopic model")
 
-                vectorizer_model = CountVectorizer(ngram_range=(1, 2), min_df=2, max_df=0.9)
+                # Adaptively adjust vectorizer parameters based on dataset size
+                if n_docs < 5:
+                    min_df_param = 1
+                    max_df_param = 0.99
+                elif n_docs < 20:
+                    min_df_param = 1
+                    max_df_param = 0.95
+                else:
+                    min_df_param = 2
+                    max_df_param = 0.9
+                
+                logging.info(f"Using vectorizer params: min_df={min_df_param}, max_df={max_df_param} (n_docs={n_docs})")
+                vectorizer_model = CountVectorizer(ngram_range=(1, 2), min_df=min_df_param, max_df=max_df_param)
+                
+                # Adaptively adjust UMAP parameters
+                n_neighbors = min(15, max(3, n_docs - 1))  # n_neighbors must be < n_samples
+                
                 umap_model = UMAP(
-                    n_neighbors=15,
+                    n_neighbors=n_neighbors,
                     n_components=5,
                     min_dist=0.0,
                     metric='cosine',
                     random_state=42
                 )
+                
+                # Adaptively adjust HDBSCAN parameters
+                min_cluster_size = min(20, max(2, n_docs // 3))
+                
                 hdbscan_model = HDBSCAN(
-                    min_cluster_size=20,
+                    min_cluster_size=min_cluster_size,
                     metric='euclidean',
                     cluster_selection_method='eom',
                     prediction_data=True
                 )
                 representation_model = MaximalMarginalRelevance(diversity=0.3)
+                
+                # Adaptively adjust BERTopic min_topic_size
+                min_topic_size = min(20, max(2, n_docs // 3))
+                
                 topic_model = BERTopic(
                     embedding_model=embedding_model,
                     umap_model=umap_model,
@@ -1762,7 +1792,7 @@ if uploaded_file:
                     vectorizer_model=vectorizer_model,
                     representation_model=representation_model,
                     nr_topics="auto",
-                    min_topic_size=20,
+                    min_topic_size=min_topic_size,
                     calculate_probabilities=True,
                 )
                 
